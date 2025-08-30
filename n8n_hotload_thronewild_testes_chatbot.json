@@ -1,0 +1,162 @@
+{
+  "name": "GitHub → n8n Hot-Load (ThroneWild/Testes:ChatBot.json)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "github/thronewild-testes",
+        "options": {
+          "response": {
+            "responseData": "OK",
+            "responseCode": 200
+          }
+        }
+      },
+      "id": "WebhookTrigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "language": "JavaScript",
+        "jsCode": "// Filtra se o push tocou o arquivo alvo no repo (ChatBot.json na raiz)\nconst TARGET_PATHS = [\n  'ChatBot.json'\n];\n\nconst payload = $json;\n\nfunction pathMatch(p) { return !!p && TARGET_PATHS.some(t => p === t || p.startsWith(t)); }\n\nlet changed = [];\nif (payload.head_commit) {\n  const hc = payload.head_commit;\n  changed = []\n    .concat(hc.added || [], hc.modified || [], hc.removed || [])\n    .filter(Boolean);\n} else if (Array.isArray(payload.commits)) {\n  for (const c of payload.commits) {\n    changed = changed.concat(c.added || [], c.modified || [], c.removed || []);\n  }\n}\n\nconst shouldRun = changed.some(pathMatch);\nreturn [{ json: { shouldRun, changed, watched: TARGET_PATHS } }];\n"
+      },
+      "id": "FilterChangedPaths",
+      "name": "Filter Changed Paths",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json[\"shouldRun\"]}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "IFShouldRun",
+      "name": "IF Should Run?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        80,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/ThroneWild/Testes/main/ChatBot.json",
+        "responseFormat": "string",
+        "options": {
+          "fullResponse": false
+        }
+      },
+      "id": "FetchRawFile",
+      "name": "Fetch Raw File (GitHub)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        340,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "language": "JavaScript",
+        "jsCode": "// Decide o que fazer com o conteúdo baixado:\n// - Se for JS contendo 'async function main', executa\n// - Se for JSON válido, retorna o JSON pra você encadear no fluxo\n// - Caso contrário, retorna como texto\n\nconst text = items[0].json; // HTTP Request (responseFormat: string)\n\nfunction looksLikeMainJS(src) {\n  return /async\\s+function\\s+main\\s*\\(/.test(src);\n}\n\n// Tenta JSON primeiro (já que o arquivo é .json)\ntry {\n  const parsed = JSON.parse(text);\n  return [{ json: { mode: 'json', data: parsed } }];\n} catch {}\n\nif (looksLikeMainJS(text)) {\n  const wrapped = `\n    (async () => {\n      ${text}\n      if (typeof main !== 'function') throw new Error('Arquivo JS sem async function main(items)');\n      return await main(items);\n    })()\n  `;\n  const out = await eval(wrapped);\n  return Array.isArray(out) ? out : [{ json: { mode: 'js', data: out } }];\n}\n\n// fallback: texto puro\nreturn [{ json: { mode: 'text', data: text } }];\n"
+      },
+      "id": "HandleContent",
+      "name": "Handle Content (auto JSON/JS)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "subject": "n8n · GitHub push ignorado",
+        "text": "Nenhuma mudança relevante nos paths observados. Payload: {{$json.changed}}",
+        "allowMultipleEmailAddresses": true
+      },
+      "id": "NoopNotify",
+      "name": "No-op Notify (optional)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        340,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Filter Changed Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Changed Paths": {
+      "main": [
+        [
+          {
+            "node": "IF Should Run?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Should Run?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Raw File (GitHub)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No-op Notify (optional)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Raw File (GitHub)": {
+      "main": [
+        [
+          {
+            "node": "Handle Content (auto JSON/JS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "createdAt": "2025-08-30T03:41:39.742023Z",
+    "description": "Monitora pushes que tocam ChatBot.json no repo ThroneWild/Testes e carrega o conteúdo automaticamente (JSON ou JS)."
+  },
+  "active": false
+}
